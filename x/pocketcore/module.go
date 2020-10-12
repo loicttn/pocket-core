@@ -95,13 +95,14 @@ func (am AppModule) BeginBlock(ctx sdk.Ctx, req abci.RequestBeginBlock) {
 			time.Sleep(time.Duration(rand.Intn(5000)) * time.Millisecond)
 			// auto send the proofs
 			am.keeper.SendClaimTx(ctx, am.keeper, am.keeper.TmNode, ClaimTx)
+			// clear session cache and db
+			types.ClearSessionCache()
 			if counter == 5 {
 				// auto claim the proofs
 				am.keeper.SendProofTx(ctx, am.keeper.TmNode, ProofTx)
 				counter = 0
+				return
 			}
-			// clear session cache and db
-			types.ClearSessionCache()
 			counter++
 		}()
 	}
