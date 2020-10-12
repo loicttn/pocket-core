@@ -85,6 +85,7 @@ func (am AppModule) NewQuerierHandler() sdk.Querier {
 	return keeper.NewQuerier(am.keeper)
 }
 
+var counter = 0
 // "BeginBlock" - Functionality that is called at the beginning of (every) block
 func (am AppModule) BeginBlock(ctx sdk.Ctx, req abci.RequestBeginBlock) {
 	if am.keeper.IsSessionBlock(ctx) && ctx.BlockHeight() != 1 {
@@ -93,10 +94,15 @@ func (am AppModule) BeginBlock(ctx sdk.Ctx, req abci.RequestBeginBlock) {
 			time.Sleep(time.Duration(rand.Intn(5000)) * time.Millisecond)
 			// auto send the proofs
 			am.keeper.SendClaimTx(ctx, am.keeper, am.keeper.TmNode, ClaimTx)
-			// auto claim the proofs
-			am.keeper.SendProofTx(ctx, am.keeper.TmNode, ProofTx)
 			// clear session cache and db
 			types.ClearSessionCache()
+			if counter == 5 {
+				// auto claim the proofs
+				am.keeper.SendProofTx(ctx, am.keeper.TmNode, ProofTx)
+				counter = 0
+				return
+			}
+			counter++
 		}()
 	}
 	go func() {
