@@ -1,13 +1,23 @@
 package cli
 
 import (
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"github.com/pokt-network/pocket-core/app"
+	"github.com/pokt-network/pocket-core/app/cmd/rpc"
+	types2 "github.com/pokt-network/pocket-core/types"
 	"github.com/spf13/cobra"
+	"github.com/tendermint/tendermint/crypto/tmhash"
+	"github.com/tendermint/tendermint/libs/common"
 	"github.com/tendermint/tendermint/libs/log"
+	"github.com/tendermint/tendermint/rpc/client"
 	"github.com/tendermint/tendermint/state"
+	"io/ioutil"
 	"os"
 	"strconv"
+	"time"
 )
 
 func init() {
@@ -18,6 +28,7 @@ func init() {
 	utilCmd.AddCommand(unsafeRollbackCmd)
 	utilCmd.AddCommand(exportGenesisForReset)
 	utilCmd.AddCommand(completionCmd)
+	utilCmd.AddCommand(decode7022)
 }
 
 var utilCmd = &cobra.Command{
@@ -211,4 +222,91 @@ $ pocket util completion fish > ~/.config/fish/completions/pocket.fish
 			_ = cmd.Root().GenPowerShellCompletion(os.Stdout)
 		}
 	},
+}
+
+type Seven22Results struct {
+	Frequency        int           `json:"frequency"`
+	NumUniqueMsg     int           `json:"unique_messages"`
+	NumUniqueSenders int           `json:"unique_senders"`
+	Transactions     []CLIResultTx `json:"transactions"`
+}
+
+var decode7022 = &cobra.Command{
+	Use:   "decode-7022 <path-to-json>",
+	Short: "",
+	Long:  ``,
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		tmClient := client.NewHTTP(app.DefaultTMURI, "/websocket")
+		defer tmClient.Stop()
+		app.InitConfig(datadir, tmNode, persistentPeers, seeds, remoteCLIURL)
+		knownSenders := make(map[string]struct{})
+		knownMessages := make(map[string]struct{})
+		orderedResults := make(map[uint32]Seven22Results, 0)
+		path := args[0]
+		r, err := ioutil.ReadFile(path)
+		if err != nil {
+			panic("unable to read file\n:" + err.Error())
+		}
+		var txBytes []string
+		err = json.Unmarshal(r, &txBytes)
+		if err != nil {
+			panic("unable to unmarshal to json\n:" + err.Error())
+		}
+		for i, s := range txBytes {
+			res, err := base64.StdEncoding.DecodeString(s)
+			if err != nil {
+				panic("unable to convert decode from hex\n:" + err.Error())
+			}
+			result, err := tmClient.Tx(tmhash.Sum(res), false)
+			if err != nil {
+				fmt.Println(fmt.Sprintf("unable to query transaction on iteration %d :"+err.Error(), i))
+				continue
+			}
+			rpcResponse := rpc.ResultTxToRPC(result)
+			// add result to map
+			cur := orderedResults[rpcResponse.TxResult.Code]
+			sender := rpcResponse.StdTx.GetSigner()
+			msg := hex.EncodeToString(rpcResponse.StdTx.Msg.GetSignBytes())
+			_, ok := knownSenders[sender.String()+string(rpcResponse.TxResult.Code)]
+			if !ok {
+				knownSenders[sender.String()+string(rpcResponse.TxResult.Code)] = struct{}{}
+				cur.NumUniqueSenders++
+			}
+			_, ok = knownMessages[msg+string(rpcResponse.TxResult.Code)]
+			if !ok {
+				knownMessages[msg+string(rpcResponse.TxResult.Code)] = struct{}{}
+				cur.NumUniqueMsg++
+			}
+			cur.Frequency++
+			cur.Transactions = append(cur.Transactions, CLIResultTx{
+				Hash:   rpcResponse.Hash,
+				Height: rpcResponse.Height,
+				Log:    rpcResponse.TxResult.Log[:100],
+				Msg:    rpcResponse.StdTx.Msg,
+			})
+			orderedResults[rpcResponse.TxResult.Code] = cur
+			time.Sleep(1000)
+		}
+		j, err := json.MarshalIndent(orderedResults, "", "    ")
+		if err != nil {
+			panic("unable to marshal results to json indent: " + err.Error())
+		}
+		home, err := os.UserHomeDir()
+		if err != nil {
+			panic("unable to get user home to write results " + err.Error())
+		}
+		err = ioutil.WriteFile(home+"/result.json", j, 0777)
+		if err != nil {
+			panic("unable to get to write results " + err.Error())
+		}
+	},
+}
+
+// Result of querying for a tx
+type CLIResultTx struct {
+	Hash   common.HexBytes `json:"hash"`
+	Height int64           `json:"height"`
+	Log    string          `json:"log"`
+	Msg    types2.Msg      `json:"msg"`
 }
