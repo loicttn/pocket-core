@@ -15,7 +15,7 @@ import (
 )
 
 // auto sends a proof transaction for the claim
-func (k Keeper) SendProofTx(ctx sdk.Ctx, n client.Client, proofTx func(cliCtx util.CLIContext, txBuilder auth.TxBuilder, merkleProof pc.MerkleProof, leafNode pc.Proof, evidenceType pc.EvidenceType) (*sdk.TxResponse, error)) {
+func (k Keeper) SendProofTx(ctx sdk.Ctx, n client.Client, proofTx func(ctx sdk.Ctx, k Keeper, cliCtx util.CLIContext, txBuilder auth.TxBuilder, merkleProof pc.MerkleProof, leafNode pc.Proof, evidenceType pc.EvidenceType) (*sdk.TxResponse, error)) {
 	kp, err := k.GetPKFromFile(ctx)
 	if err != nil {
 		ctx.Logger().Error(fmt.Sprintf("an error occured retrieving the pk from the file for the Proof Transaction:\n%v", err))
@@ -58,7 +58,7 @@ func (k Keeper) SendProofTx(ctx sdk.Ctx, n client.Client, proofTx func(cliCtx ut
 			return
 		}
 		// send the proof TX
-		_, err = proofTx(cliCtx, txBuilder, mProof, leaf, evidence.EvidenceType)
+		_, err = proofTx(ctx, k, cliCtx, txBuilder, mProof, leaf, evidence.EvidenceType)
 		if err != nil {
 			ctx.Logger().Error(err.Error())
 		}

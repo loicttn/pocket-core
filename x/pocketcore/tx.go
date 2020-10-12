@@ -5,11 +5,12 @@ import (
 	sdk "github.com/pokt-network/pocket-core/types"
 	"github.com/pokt-network/pocket-core/x/auth"
 	"github.com/pokt-network/pocket-core/x/auth/util"
+	"github.com/pokt-network/pocket-core/x/pocketcore/keeper"
 	"github.com/pokt-network/pocket-core/x/pocketcore/types"
 )
 
 // "ClaimTx" - A transaction that sends the total number of proofs (claim), the merkle root (for data integrity), and the header (for identification)
-func ClaimTx(kp crypto.PrivateKey, cliCtx util.CLIContext, txBuilder auth.TxBuilder, header types.SessionHeader, totalProofs int64, root types.HashRange, evidenceType types.EvidenceType) (*sdk.TxResponse, error) {
+func ClaimTx(ctx sdk.Ctx, k keeper.Keeper, kp crypto.PrivateKey, cliCtx util.CLIContext, txBuilder auth.TxBuilder, header types.SessionHeader, totalProofs int64, root types.HashRange, evidenceType types.EvidenceType) (*sdk.TxResponse, error) {
 	msg := types.MsgClaim{
 		SessionHeader:    header,
 		TotalProofs:      totalProofs,
@@ -22,11 +23,17 @@ func ClaimTx(kp crypto.PrivateKey, cliCtx util.CLIContext, txBuilder auth.TxBuil
 	if err != nil {
 		return nil, err
 	}
-	return util.CompleteAndBroadcastTxCLI(txBuilder, cliCtx, msg)
+
+	res := handleClaimMsg(ctx, k, msg)
+	return &sdk.TxResponse{
+		Height:    ctx.BlockHeight(),
+		Code:      uint32(res.Code),
+	}, nil
+	//return util.CompleteAndBroadcastTxCLI(txBuilder, cliCtx, msg)
 }
 
 // "ProofTx" - A transaction to prove the claim that was previously sent (Merkle Proofs and leaf/cousin)
-func ProofTx(cliCtx util.CLIContext, txBuilder auth.TxBuilder, merkleProof types.MerkleProof, leafNode types.Proof, evidenceType types.EvidenceType) (*sdk.TxResponse, error) {
+func ProofTx(ctx sdk.Ctx, k keeper.Keeper, cliCtx util.CLIContext, txBuilder auth.TxBuilder, merkleProof types.MerkleProof, leafNode types.Proof, evidenceType types.EvidenceType) (*sdk.TxResponse, error) {
 	msg := types.MsgProof{
 		MerkleProof:  merkleProof,
 		Leaf:         leafNode,
@@ -36,5 +43,11 @@ func ProofTx(cliCtx util.CLIContext, txBuilder auth.TxBuilder, merkleProof types
 	if err != nil {
 		return nil, err
 	}
-	return util.CompleteAndBroadcastTxCLI(txBuilder, cliCtx, msg)
+	res := handleProofMsg(ctx, k, msg)
+
+	return &sdk.TxResponse{
+		Height:    ctx.BlockHeight(),
+		Code:      uint32(res.Code),
+	}, nil
+	//return util.CompleteAndBroadcastTxCLI(txBuilder, cliCtx, msg)
 }
