@@ -105,6 +105,26 @@ workflows:
               only:
                 - staging
                 - master
+  build-test-deploy-tag:
+    jobs:
+      - build:
+          filters:
+            tags:
+              only:
+                - /^RC-.*/
+                - /^stable-.*/
+            branches:
+              ignore: /.*/
+      - test:
+          requires:
+            - build
+          filters:
+            tags:
+              only:
+                - /^RC-.*/
+                - /^stable-.*/
+            branches:
+              ignore: /.*/
       - trigger-pocket-core-deployments-tags:
           requires:
             - test
@@ -115,5 +135,3 @@ workflows:
                 - /^stable-.*/
             branches:
               ignore: /.*/
-
-

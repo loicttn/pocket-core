@@ -9,11 +9,21 @@ import (
 
 // "Evidence" - A proof of work/burn for nodes.
 type Evidence struct {
-	Bloom         bloom.BloomFilter        `json:"bloom_filter"` // used to check if proof contains
-	SessionHeader `json:"evidence_header"` // the session h serves as an identifier for the evidence
-	NumOfProofs   int64                    `json:"num_of_proofs"` // the total number of proofs in the evidence
-	Proofs        []Proof                  `json:"proofs"`        // a slice of Proof objects (Proof per relay or challenge)
-	EvidenceType  EvidenceType             `json:"evidence_type"`
+	Bloom         bloom.BloomFilter `json:"bloom_filter"` // used to check if proof contains
+	SessionHeader `json:"evidence_header"`                // the session h serves as an identifier for the evidence
+	NumOfProofs   int64        `json:"num_of_proofs"`     // the total number of proofs in the evidence
+	Proofs        []Proof      `json:"proofs"`            // a slice of Proof objects (Proof per relay or challenge)
+	EvidenceType  EvidenceType `json:"evidence_type"`
+	Sealed        bool         `json:"sealed"`
+}
+
+func (e Evidence) IsSealed() bool {
+	return e.Sealed
+}
+
+func (e Evidence) Seal() CacheObject {
+	e.Sealed = true
+	return e
 }
 
 // "GenerateMerkleRoot" - Generates the merkle root for an evidence object
@@ -22,8 +32,8 @@ func (e *Evidence) GenerateMerkleRoot() (root HashRange) {
 	root, sortedProofs := GenerateRoot(e.Proofs)
 	// sort the proofs
 	e.Proofs = sortedProofs
-	// set the evidence in cache
-	SetEvidence(*e)
+	// seal the evidence in cache/db
+	SealEvidence(*e)
 	return
 }
 
@@ -48,11 +58,12 @@ func (e *Evidence) GenerateMerkleProof(index int) (proof MerkleProof, leaf Proof
 
 // "Evidence" - A proof of work/burn for nodes.
 type evidence struct {
-	BloomBytes    []byte                   `json:"bloom_bytes"`
-	SessionHeader `json:"evidence_header"` // the session h serves as an identifier for the evidence
-	NumOfProofs   int64                    `json:"num_of_proofs"` // the total number of proofs in the evidence
-	Proofs        []Proof                  `json:"proofs"`        // a slice of Proof objects (Proof per relay or challenge)
-	EvidenceType  EvidenceType             `json:"evidence_type"`
+	BloomBytes    []byte `json:"bloom_bytes"`
+	SessionHeader `json:"evidence_header"`            // the session h serves as an identifier for the evidence
+	NumOfProofs   int64        `json:"num_of_proofs"` // the total number of proofs in the evidence
+	Proofs        []Proof      `json:"proofs"`        // a slice of Proof objects (Proof per relay or challenge)
+	EvidenceType  EvidenceType `json:"evidence_type"`
+	Sealed        bool         `json:"sealed"`
 }
 
 var _ CacheObject = Evidence{} // satisfies the cache object interface
@@ -68,6 +79,7 @@ func (e Evidence) Marshal() ([]byte, error) {
 		NumOfProofs:   e.NumOfProofs,
 		Proofs:        e.Proofs,
 		EvidenceType:  e.EvidenceType,
+		Sealed:        e.Sealed,
 	}
 	return ModuleCdc.MarshalBinaryBare(ep)
 }
@@ -88,7 +100,8 @@ func (e Evidence) Unmarshal(b []byte) (CacheObject, error) {
 		SessionHeader: ep.SessionHeader,
 		NumOfProofs:   ep.NumOfProofs,
 		Proofs:        ep.Proofs,
-		EvidenceType:  ep.EvidenceType}
+		EvidenceType:  ep.EvidenceType,
+		Sealed:        ep.Sealed}
 	return evidence, nil
 }
 

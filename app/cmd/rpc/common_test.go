@@ -53,10 +53,9 @@ func NewInMemoryTendermintNode(t *testing.T, genesisState []byte) (tendermintNod
 	assert.NotNil(t, tendermintNode)
 	assert.NotNil(t, keybase)
 	// init cache in memory
-	pocketTypes.InitConfig("", "data", "data", dbm.MemDBBackend, dbm.MemDBBackend, 100, 100, "pocket_evidence", "session", pocketTypes.HostedBlockchains{
+	pocketTypes.InitConfig(&pocketTypes.HostedBlockchains{
 		M: make(map[string]pocketTypes.HostedBlockchain),
-	}, tendermintNode.Logger, "26660", 3, 3000)
-	pocketTypes.InitClientBlockAllowance(1000)
+	}, tendermintNode.Logger, sdk.DefaultTestingPocketConfig())
 	// start the in memory node
 	err := tendermintNode.Start()
 	// assert that it is not nil
@@ -157,9 +156,9 @@ func inMemTendermintNode(genesisState []byte) (*node.Node, keys.Keybase) {
 	pocketTypes.InitPVKeyFile(privVal.Key)
 
 	creator := func(logger log.Logger, db dbm.DB, _ io.Writer) *app.PocketCoreApp {
-		m := map[string]pocketTypes.HostedBlockchain{app.PlaceholderHash: {
-			ID:  app.PlaceholderHash,
-			URL: app.PlaceholderURL,
+		m := map[string]pocketTypes.HostedBlockchain{sdk.PlaceholderHash: {
+			ID:  sdk.PlaceholderHash,
+			URL: sdk.PlaceholderURL,
 		}}
 		p := app.NewPocketCoreApp(app.GenState, getInMemoryKeybase(), getInMemoryTMClient(), &pocketTypes.HostedBlockchains{M: m}, logger, db, bam.SetPruning(store.PruneNothing))
 		return p
@@ -202,6 +201,7 @@ func inMemTendermintNode(genesisState []byte) (*node.Node, keys.Keybase) {
 	baseapp.SetTxIndexer(tmNode.TxIndexer())
 	baseapp.SetBlockstore(tmNode.BlockStore())
 	baseapp.SetEvidencePool(tmNode.EvidencePool())
+	//baseapp.pocketKeeper.TmNode = client.NewLocal(tmNode)
 	baseapp.SetTendermintNode(tmNode)
 	app.PCA = baseapp
 	return tmNode, kb

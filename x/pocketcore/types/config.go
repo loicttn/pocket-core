@@ -2,8 +2,8 @@ package types
 
 import (
 	"fmt"
+	"github.com/pokt-network/pocket-core/types"
 	"github.com/tendermint/tendermint/libs/log"
-	db "github.com/tendermint/tm-db"
 	"time"
 )
 
@@ -14,31 +14,28 @@ const (
 )
 
 var (
-	globalUserAgent  string
-	globalRPCTimeout time.Duration
+	globalRPCTimeout   time.Duration
+	GlobalPocketConfig types.PocketConfig
 )
 
 // "InitConfig" - Initializes the cache for sessions and evidence
-func InitConfig(userAgent, evidenceDir, sessionDir string, sessionDBType, evidenceDBType db.BackendType, maxEvidenceEntries, maxSessionEntries int, evidenceDBName, sessionDBName string, chains HostedBlockchains, logger log.Logger, prometheusAddr string, maxOpenConn int, timeout int64) {
+func InitConfig(chains *HostedBlockchains, logger log.Logger, c types.PocketConfig) {
 	cacheOnce.Do(func() {
 		globalEvidenceCache = new(CacheStorage)
 		globalSessionCache = new(CacheStorage)
-		globalEvidenceCache.Init(evidenceDir, evidenceDBName, evidenceDBType, maxEvidenceEntries)
-		globalSessionCache.Init(sessionDir, sessionDBName, sessionDBType, maxSessionEntries)
-		InitGlobalServiceMetric(chains, logger, prometheusAddr, maxOpenConn)
+		globalEvidenceCache.Init(c.DataDir, c.EvidenceDBName, c.EvidenceDBType, c.MaxEvidenceCacheEntires)
+		globalSessionCache.Init(c.DataDir, c.SessionDBName, c.SessionDBType, c.MaxSessionCacheEntries)
+		InitGlobalServiceMetric(*chains, logger, c.PrometheusAddr, c.PrometheusMaxOpenfiles)
 	})
-	globalUserAgent = userAgent
-	SetRPCTimeout(timeout)
+	GlobalPocketConfig = c
+	SetRPCTimeout(c.RPCTimeout)
 }
 
-func FlushCache() {
+// NOTE: evidence cache is flushed every time db iterator is created (every claim/proof submission)
+func FlushSessionCache() {
 	err := globalSessionCache.FlushToDB()
 	if err != nil {
 		fmt.Printf("unable to flush sessions to the database before shutdown!! %s\n", err.Error())
-	}
-	err = globalEvidenceCache.FlushToDB()
-	if err != nil {
-		fmt.Printf("unable to flush evidence to the database before shutdown!! %s\n", err.Error())
 	}
 }
 

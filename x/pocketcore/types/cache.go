@@ -23,13 +23,15 @@ var (
 type CacheStorage struct {
 	Cache *Cache     // lru cache
 	DB    db.DB      // persisted
-	l     sync.Mutex // lock TODO NOTE: this mutex doesn't guarantee data consistency for gets and sets (max relays could go over)
+	l     sync.Mutex // lock
 }
 
 type CacheObject interface {
 	Marshal() ([]byte, error)
 	Unmarshal(b []byte) (CacheObject, error)
 	Key() ([]byte, error)
+	Seal() CacheObject
+	IsSealed() bool
 }
 
 // "Init" - Initializes a cache storage object
@@ -48,12 +50,16 @@ func (cs *CacheStorage) Init(dir, name string, dbType db.BackendType, maxEntries
 func (cs *CacheStorage) Get(key []byte, object CacheObject) (interface{}, bool) {
 	cs.l.Lock()
 	defer cs.l.Unlock()
+	return cs.GetWithoutLock(key, object)
+}
+
+func (cs *CacheStorage) GetWithoutLock(key []byte, object CacheObject) (interface{}, bool) {
 	// get the object using hex string of key
 	if res, ok := cs.Cache.Get(hex.EncodeToString(key)); ok {
 		return res, true
 	}
 	// not in cache, so search database
-	bz, _ := cs.DB.Get(key)
+	bz := cs.DB.Get(key)
 	if len(bz) == 0 {
 		return nil, false
 	}
@@ -67,18 +73,55 @@ func (cs *CacheStorage) Get(key []byte, object CacheObject) (interface{}, bool) 
 	return res, true
 }
 
-// "Set" - Sets the KV pair in cache and db
-func (cs *CacheStorage) Set(key []byte, val CacheObject) {
-	if cs.Cache.Len() == cs.Cache.Cap() {
-		err := cs.FlushToDB()
-		if err != nil {
-			fmt.Printf("cache storage cannot be flushed to database (in set): %s", err.Error())
-		}
-	}
+// "Seal" - Seals the cache object so it is no longer writable in the cache store
+func (cs *CacheStorage) Seal(object CacheObject) (cacheObject CacheObject, isOK bool) {
 	cs.l.Lock()
 	defer cs.l.Unlock()
+	// get the key from the object
+	k, err := object.Key()
+	if err != nil {
+		return object, false
+	}
+	// make READONLY
+	sealed := object.Seal()
+	// set in db and cache
+	cs.SetWithoutLockAndSealCheck(hex.EncodeToString(k), sealed)
+	return sealed, true
+}
+
+// "Set" - Sets the KV pair in cache and db
+func (cs *CacheStorage) Set(key []byte, val CacheObject) {
+	keyString := hex.EncodeToString(key)
+	cs.l.Lock()
+	defer cs.l.Unlock()
+	// get object to check if sealed
+	res, found := cs.GetWithoutLock(key, val)
+	if found {
+		co, ok := res.(CacheObject)
+		if !ok {
+			fmt.Printf("ERROR: cannot convert object into cache object (in set)")
+			return
+		}
+		if co.IsSealed() {
+			return
+		}
+	}
+	cs.SetWithoutLockAndSealCheck(keyString, val)
+}
+
+// "SetWithoutLockAndSealCheck" - CONTRACT: used in a function with lock
+//                                          cache must be flushed to db before any DB iterator
+func (cs *CacheStorage) SetWithoutLockAndSealCheck(key string, val CacheObject) {
+	// flush to db
+	if cs.Cache.Len() == cs.Cache.Cap() && !cs.Cache.Contains(key) {
+		err := cs.FlushToDBWithoutLock()
+		if err != nil {
+			fmt.Printf("ERROR: cache storage cannot be flushed to database (in set): %s", err.Error())
+			return
+		}
+	}
 	// add to cache
-	cs.Cache.Add(hex.EncodeToString(key), val)
+	cs.Cache.Add(key, val)
 }
 
 // "Delete" - Deletes the item from stores
@@ -94,6 +137,10 @@ func (cs *CacheStorage) Delete(key []byte) {
 func (cs *CacheStorage) FlushToDB() error {
 	cs.l.Lock()
 	defer cs.l.Unlock()
+	return cs.FlushToDBWithoutLock()
+}
+
+func (cs *CacheStorage) FlushToDBWithoutLock() error {
 	// flush all to database
 	for {
 		key, val, ok := cs.Cache.RemoveOldest()
@@ -136,7 +183,10 @@ func (cs *CacheStorage) Clear() {
 
 // "Iterator" - Returns an iterator for all of the items in the stores
 func (cs *CacheStorage) Iterator() (db.Iterator, error) {
-	_ = cs.FlushToDB()
+	err := cs.FlushToDB()
+	if err != nil {
+		fmt.Printf("unable to flush to db before iterator created in cacheStorage Iterator(): %s", err.Error())
+	}
 	return cs.DB.Iterator(nil, nil)
 }
 
@@ -228,8 +278,17 @@ func GetEvidence(header SessionHeader, evidenceType EvidenceType, max sdk.Int) (
 	}
 	evidence, ok := val.(Evidence)
 	if !ok {
-		err = fmt.Errorf("could not unmarshal into session from cache with header %v", header)
+		err = fmt.Errorf("could not unmarshal into evidence from cache with header %v", header)
 		return
+	}
+	// if hit relay limit... Seal the evidence
+	if found && !max.Equal(sdk.ZeroInt()) && evidence.NumOfProofs >= max.Int64() {
+		evidence, ok = SealEvidence(evidence)
+		if !ok {
+			err = fmt.Errorf("max relays is hit and could not seal evidence! GetEvidence() with header %v", header)
+			return
+		}
+		evidence.Sealed = true
 	}
 	return
 }
@@ -237,7 +296,7 @@ func GetEvidence(header SessionHeader, evidenceType EvidenceType, max sdk.Int) (
 // "SetEvidence" - Sets an evidence object in the storage
 func SetEvidence(evidence Evidence) {
 	// generate the key for the evidence
-	key, err := KeyForEvidence(evidence.SessionHeader, evidence.EvidenceType)
+	key, err := evidence.Key()
 	if err != nil {
 		return
 	}
@@ -254,6 +313,17 @@ func DeleteEvidence(header SessionHeader, evidenceType EvidenceType) error {
 	// delete from cache
 	globalEvidenceCache.Delete(key)
 	return nil
+}
+
+// "SealEvidence" - Locks/sets the evidence from the stores
+func SealEvidence(evidence Evidence) (Evidence, bool) {
+	// delete from cache
+	co, ok := globalEvidenceCache.Seal(evidence)
+	if !ok {
+		return Evidence{}, ok
+	}
+	e, ok := co.(Evidence)
+	return e, ok
 }
 
 // "ClearEvidence" - Clear stores of all evidence

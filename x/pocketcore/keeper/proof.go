@@ -34,8 +34,27 @@ func (k Keeper) SendProofTx(ctx sdk.Ctx, n client.Client, proofTx func(cliCtx ut
 		// check to see if evidence is stored in cache
 		evidence, err := pc.GetEvidence(claim.SessionHeader, claim.EvidenceType, sdk.ZeroInt())
 		if err != nil || evidence.Proofs == nil || len(evidence.Proofs) == 0 {
-			ctx.Logger().Info(fmt.Sprintf("the evidence object for evidence is not found, ignoring pending claim for app: %s, at sessionHeight: %d", claim.ApplicationPubKey, claim.SessionBlockHeight))
+			ctx.Logger().Info(fmt.Sprintf("the evidence object for evidence is not found, ignoring pending claim for app: %s, at sessionHeight: %d, with error: %v", claim.ApplicationPubKey, claim.SessionBlockHeight, err))
 			continue
+		}
+		if ctx.BlockHeight()-claim.SessionBlockHeight > int64(pc.GlobalPocketConfig.MaxClaimAgeForProofRetry) {
+			err := pc.DeleteEvidence(claim.SessionHeader, claim.EvidenceType)
+			if err != nil {
+				ctx.Logger().Info(fmt.Sprintf("unable to delete evidence that is older than 32 blocks: %s", err.Error()))
+			}
+			continue
+		}
+		if !evidence.IsSealed() {
+			err := pc.DeleteEvidence(claim.SessionHeader, claim.EvidenceType)
+			if err != nil {
+				ctx.Logger().Info(fmt.Sprintf("evidence is not sealed, could cause a relay leak: %s", err.Error()))
+			}
+		}
+		if evidence.NumOfProofs != claim.TotalProofs {
+			err := pc.DeleteEvidence(claim.SessionHeader, claim.EvidenceType)
+			if err != nil {
+				ctx.Logger().Info(fmt.Sprintf("evidence num of proofs does not equal claim total proofs... possible relay leak: %s", err.Error()))
+			}
 		}
 		// get the session context
 		sessionCtx, err := ctx.PrevCtx(claim.SessionBlockHeight)
@@ -51,6 +70,13 @@ func (k Keeper) SendProofTx(ctx sdk.Ctx, n client.Client, proofTx func(cliCtx ut
 		}
 		// get the merkle proof object for the pseudorandom index
 		mProof, leaf := evidence.GenerateMerkleProof(int(index))
+		// if prevalidation on, then pre-validate
+		if pc.GlobalPocketConfig.ProofPrevalidation {
+			if !mProof.Validate(claim.MerkleRoot, leaf, claim.TotalProofs) {
+				ctx.Logger().Error(fmt.Sprintf("produced invalid proof for pending claim for app: %s, at sessionHeight: %d", claim.ApplicationPubKey, claim.SessionBlockHeight))
+				continue
+			}
+		}
 		// generate the auto txbuilder and clictx
 		txBuilder, cliCtx, err := newTxBuilderAndCliCtx(ctx, pc.MsgProof{}, n, kp, k)
 		if err != nil {
@@ -67,55 +93,55 @@ func (k Keeper) SendProofTx(ctx sdk.Ctx, n client.Client, proofTx func(cliCtx ut
 
 func (k Keeper) ValidateProof(ctx sdk.Ctx, proof pc.MsgProof) (servicerAddr sdk.Address, claim pc.MsgClaim, sdkError sdk.Error) {
 	// get the public key from the claim
-	addr := proof.GetSigner()
+	servicerAddr = proof.GetSigner()
 	// get the claim for the address
-	claim, found := k.GetClaim(ctx, addr, proof.Leaf.SessionHeader(), proof.EvidenceType)
+	claim, found := k.GetClaim(ctx, servicerAddr, proof.Leaf.SessionHeader(), proof.EvidenceType)
 	// if the claim is not found for this claim
 	if !found {
-		return nil, pc.MsgClaim{}, pc.NewClaimNotFoundError(pc.ModuleName)
+		return servicerAddr, claim, pc.NewClaimNotFoundError(pc.ModuleName)
 	}
 	// get the session context
 	sessionCtx, err := ctx.PrevCtx(claim.SessionBlockHeight)
 	if err != nil {
-		return nil, pc.MsgClaim{}, sdk.ErrInternal(err.Error())
+		return servicerAddr, claim, sdk.ErrInternal(err.Error())
 	}
 	// validate the proof
 	ctx.Logger().Info(fmt.Sprintf("Generate psuedorandom proof with %d proofs, at session height of %d, for app: %s", claim.TotalProofs, claim.SessionBlockHeight, claim.ApplicationPubKey))
 	reqProof, err := k.getPseudorandomIndex(ctx, claim.TotalProofs, claim.SessionHeader, sessionCtx)
 	if err != nil {
-		return nil, pc.MsgClaim{}, sdk.ErrInternal(err.Error())
+		return servicerAddr, claim, sdk.ErrInternal(err.Error())
 	}
 	// if the required proof message index does not match the leaf node index
 	if reqProof != int64(proof.MerkleProof.TargetIndex) {
-		return nil, pc.MsgClaim{}, pc.NewInvalidProofsError(pc.ModuleName)
+		return servicerAddr, claim, pc.NewInvalidProofsError(pc.ModuleName)
 	}
 	// validate level count on claim by total relays
 	levelCount := len(proof.MerkleProof.HashRanges)
 	if levelCount != int(math.Ceil(math.Log2(float64(claim.TotalProofs)))) {
-		return nil, pc.MsgClaim{}, pc.NewInvalidProofsError(pc.ModuleName)
+		return servicerAddr, claim, pc.NewInvalidProofsError(pc.ModuleName)
 	}
 	// validate number of proofs
 	if minProofs := k.MinimumNumberOfProofs(sessionCtx); claim.TotalProofs < minProofs {
-		return nil, pc.MsgClaim{}, pc.NewInvalidMerkleVerifyError(pc.ModuleName)
+		return servicerAddr, claim, pc.NewInvalidProofsError(pc.ModuleName)
 	}
 	// validate the merkle proofs
 	isValid := proof.MerkleProof.Validate(claim.MerkleRoot, proof.Leaf, claim.TotalProofs)
 	// if is not valid for other reasons
 	if !isValid {
-		return nil, pc.MsgClaim{}, pc.NewInvalidMerkleVerifyError(pc.ModuleName)
+		return servicerAddr, claim, pc.NewInvalidMerkleVerifyError(pc.ModuleName)
 	}
 	// get the application
 	application, found := k.GetAppFromPublicKey(sessionCtx, claim.ApplicationPubKey)
 	if !found {
-		return nil, pc.MsgClaim{}, pc.NewAppNotFoundError(pc.ModuleName)
+		return servicerAddr, claim, pc.NewAppNotFoundError(pc.ModuleName)
 	}
 	// validate the proof depending on the type of proof it is
 	er := proof.Leaf.Validate(application.GetChains(), int(k.SessionNodeCount(sessionCtx)), claim.SessionBlockHeight)
 	if er != nil {
-		return nil, pc.MsgClaim{}, er
+		return nil, claim, er
 	}
 	// return the needed info to the handler
-	return addr, claim, nil
+	return servicerAddr, claim, nil
 }
 
 func (k Keeper) ExecuteProof(ctx sdk.Ctx, proof pc.MsgProof, claim pc.MsgClaim) (tokens sdk.Int, err sdk.Error) {

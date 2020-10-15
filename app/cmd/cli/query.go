@@ -308,6 +308,8 @@ func init() {
 	queryNodes.Flags().IntVar(&nodeLimit, "nodeLimit", 10000, "reduce the amount of results")
 }
 
+// NOTE: flag "blockchain" is defined but not implemented at this time 2020/10/03
+
 var queryNodes = &cobra.Command{
 	Use:   "nodes --staking-status <staked or unstaking> --jailed-status <jailed or unjailed> --blockchain <network id> --nodePage=<nodePage> --nodeLimit=<nodeLimit> <height>",
 	Short: "Gets nodes",
@@ -617,7 +619,7 @@ var queryNodeClaim = &cobra.Command{
 			height = 0 // latest
 		} else {
 			var err error
-			height, err = strconv.Atoi(args[4])
+			height, err = strconv.Atoi(args[5])
 			if err != nil {
 				fmt.Println(err)
 				return
