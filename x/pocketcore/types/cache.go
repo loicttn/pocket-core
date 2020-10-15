@@ -59,7 +59,7 @@ func (cs *CacheStorage) GetWithoutLock(key []byte, object CacheObject) (interfac
 		return res, true
 	}
 	// not in cache, so search database
-	bz := cs.DB.Get(key)
+	bz, _ := cs.DB.Get(key)
 	if len(bz) == 0 {
 		return nil, false
 	}

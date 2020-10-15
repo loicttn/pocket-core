@@ -31,6 +31,7 @@ import (
 	"github.com/tendermint/tendermint/privval"
 	"github.com/tendermint/tendermint/rpc/client"
 	"github.com/tendermint/tendermint/rpc/client/http"
+	"github.com/tendermint/tendermint/rpc/client/local"
 	dbm "github.com/tendermint/tm-db"
 	"golang.org/x/crypto/ssh/terminal"
 	"io"
@@ -213,7 +214,7 @@ func InitTendermint(keybase bool, chains *types.HostedBlockchains, logger log.Lo
 		log2.Fatal(err)
 	}
 	app.SetTendermintNode(tmNode)
-	app.pocketKeeper.TmNode = client.NewLocal(tmNode)
+	app.pocketKeeper.TmNode = local.New(tmNode)
 	PCA = app
 	return tmNode
 }
